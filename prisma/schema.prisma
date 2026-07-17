@@ -1,0 +1,528 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserStatus { ACTIVE INVITED SUSPENDED ARCHIVED }
+enum MembershipStatus { ACTIVE INVITED SUSPENDED }
+enum CageStatus { ACTIVE MAINTENANCE HARVESTED RETIRED }
+enum StockStatus { ACTIVE HARVESTED CLOSED }
+enum InventoryType { FEED MEDICINE EQUIPMENT }
+enum InventoryMovementType { PURCHASE CONSUMPTION ADJUSTMENT RETURN TRANSFER }
+enum TaskStatus { OPEN IN_PROGRESS BLOCKED COMPLETED CANCELLED }
+enum ExpenseCategory { FEED MEDICINE LABOR MAINTENANCE EQUIPMENT FUEL UTILITIES OTHER }
+enum IncomeCategory { SALE OTHER }
+enum NotificationChannel { IN_APP PUSH EMAIL SMS }
+enum NotificationStatus { PENDING SENT READ FAILED }
+enum MediaType { PHOTO VIDEO DOCUMENT }
+enum AnalysisStatus { PENDING COMPLETED FAILED DISMISSED }
+
+model User {
+  id             String   @id @default(uuid()) @db.Uuid
+  email          String   @unique @db.Citext
+  passwordHash   String?
+  displayName    String
+  locale         String   @default("en")
+  status         UserStatus @default(INVITED)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  memberships    CompanyMember[]
+  attendance     Attendance[]
+  assignedTasks  Task[] @relation("TaskAssignee")
+  createdTasks   Task[] @relation("TaskCreator")
+  auditLogs      AuditLog[]
+  notifications  Notification[]
+  uploads        MediaAsset[] @relation("MediaUploader")
+}
+
+model Role {
+  id          String @id @default(uuid()) @db.Uuid
+  companyId   String? @db.Uuid
+  code        String
+  name        String
+  description String?
+  isSystem    Boolean @default(false)
+  permissions RolePermission[]
+  members     CompanyMember[]
+  @@unique([companyId, code])
+}
+
+model Permission {
+  id          String @id @default(uuid()) @db.Uuid
+  code        String @unique
+  description String
+  roles       RolePermission[]
+}
+
+model RolePermission {
+  roleId       String @db.Uuid
+  permissionId String @db.Uuid
+  role         Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  @@id([roleId, permissionId])
+}
+
+model Company {
+  id          String @id @default(uuid()) @db.Uuid
+  name        String
+  legalName   String?
+  timezone    String @default("UTC")
+  currency    String @default("USD") @db.Char(3)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  members     CompanyMember[]
+  farms       Farm[]
+  suppliers   Supplier[]
+  customers   Customer[]
+  expenses    Expense[]
+  incomes     Income[]
+  inventoryLots InventoryLot[]
+  alerts      Notification[]
+  auditLogs   AuditLog[]
+  analyses    AiAnalysis[]
+  @@index([name])
+}
+
+model CompanyMember {
+  id        String @id @default(uuid()) @db.Uuid
+  companyId String @db.Uuid
+  userId    String @db.Uuid
+  roleId    String @db.Uuid
+  status    MembershipStatus @default(INVITED)
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user      User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      Role @relation(fields: [roleId], references: [id])
+  @@unique([companyId, userId])
+  @@index([userId, status])
+}
+
+model Farm {
+  id        String @id @default(uuid()) @db.Uuid
+  companyId String @db.Uuid
+  name      String
+  latitude  Decimal? @db.Decimal(9,6)
+  longitude Decimal? @db.Decimal(9,6)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  lakes     Lake[]
+  employees Employee[]
+  assets    Asset[]
+  tasks     Task[]
+  @@unique([companyId, name])
+}
+
+model Lake {
+  id        String @id @default(uuid()) @db.Uuid
+  farmId    String @db.Uuid
+  name      String
+  latitude  Decimal? @db.Decimal(9,6)
+  longitude Decimal? @db.Decimal(9,6)
+  farm      Farm @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  cages     Cage[]
+  weather   WeatherObservation[]
+  @@unique([farmId, name])
+}
+
+model Cage {
+  id          String @id @default(uuid()) @db.Uuid
+  lakeId      String @db.Uuid
+  code        String
+  status      CageStatus @default(ACTIVE)
+  latitude    Decimal? @db.Decimal(9,6)
+  longitude   Decimal? @db.Decimal(9,6)
+  volumeM3    Decimal? @db.Decimal(12,2)
+  installedAt DateTime?
+  lake        Lake @relation(fields: [lakeId], references: [id], onDelete: Restrict)
+  stocks      FishStock[]
+  feedings    DailyFeeding[]
+  samplings   Sampling[]
+  mortalities Mortality[]
+  waterQuality WaterQuality[]
+  maintenance Maintenance[]
+  harvests    Harvest[]
+  @@unique([lakeId, code])
+  @@index([lakeId, status])
+}
+
+model Species {
+  id             String @id @default(uuid()) @db.Uuid
+  scientificName String @unique
+  commonName     String
+  stocks         FishStock[]
+}
+
+model FishStock {
+  id              String @id @default(uuid()) @db.Uuid
+  cageId          String @db.Uuid
+  speciesId       String @db.Uuid
+  batchCode       String
+  status          StockStatus @default(ACTIVE)
+  stockedAt       DateTime
+  initialCount    Int
+  initialWeightG  Decimal @db.Decimal(12,3)
+  cage            Cage @relation(fields: [cageId], references: [id], onDelete: Restrict)
+  species         Species @relation(fields: [speciesId], references: [id])
+  growthRecords   GrowthRecord[]
+  feedings        DailyFeeding[]
+  samplings       Sampling[]
+  mortalities     Mortality[]
+  treatments      Treatment[]
+  vaccinations    Vaccination[]
+  harvests        Harvest[]
+  @@unique([cageId, batchCode])
+  @@index([cageId, status, stockedAt])
+}
+
+model Sampling {
+  id          String @id @default(uuid()) @db.Uuid
+  fishStockId String @db.Uuid
+  cageId      String @db.Uuid
+  sampledAt   DateTime
+  sampleCount Int
+  notes       String?
+  fishStock   FishStock @relation(fields: [fishStockId], references: [id], onDelete: Restrict)
+  cage        Cage @relation(fields: [cageId], references: [id], onDelete: Restrict)
+  weights     SampleWeight[]
+  growthRecord GrowthRecord?
+  @@index([fishStockId, sampledAt(sort: Desc)])
+}
+
+model SampleWeight {
+  id         String @id @default(uuid()) @db.Uuid
+  samplingId String @db.Uuid
+  weightG    Decimal @db.Decimal(12,3)
+  sampling   Sampling @relation(fields: [samplingId], references: [id], onDelete: Cascade)
+}
+
+model GrowthRecord {
+  id             String @id @default(uuid()) @db.Uuid
+  fishStockId    String @db.Uuid
+  samplingId     String? @unique @db.Uuid
+  recordedAt     DateTime
+  averageWeightG Decimal @db.Decimal(12,3)
+  estimatedCount Int
+  biomassKg      Decimal @db.Decimal(14,3)
+  sgrPercent     Decimal? @db.Decimal(8,4)
+  adgG           Decimal? @db.Decimal(12,4)
+  fishStock      FishStock @relation(fields: [fishStockId], references: [id], onDelete: Restrict)
+  sampling       Sampling? @relation(fields: [samplingId], references: [id])
+  @@unique([fishStockId, recordedAt])
+}
+
+model FeedProduct {
+  id          String @id @default(uuid()) @db.Uuid
+  companyId   String? @db.Uuid
+  name        String
+  manufacturer String?
+  proteinPct  Decimal? @db.Decimal(5,2)
+  inventoryLots InventoryLot[]
+  feedings    DailyFeeding[]
+  @@unique([companyId, name])
+}
+
+model InventoryLot {
+  id            String @id @default(uuid()) @db.Uuid
+  companyId     String @db.Uuid
+  type          InventoryType
+  feedProductId String? @db.Uuid
+  name          String
+  lotNumber     String?
+  unit          String
+  expiresAt     DateTime?
+  company       Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  feedProduct   FeedProduct? @relation(fields: [feedProductId], references: [id])
+  movements     InventoryMovement[]
+  @@unique([companyId, type, name, lotNumber])
+  @@index([companyId, type, expiresAt])
+}
+
+model InventoryMovement {
+  id           String @id @default(uuid()) @db.Uuid
+  inventoryLotId String @db.Uuid
+  type         InventoryMovementType
+  quantity     Decimal @db.Decimal(14,3)
+  occurredAt   DateTime
+  unitCost     Decimal? @db.Decimal(14,4)
+  reference    String?
+  inventoryLot InventoryLot @relation(fields: [inventoryLotId], references: [id], onDelete: Restrict)
+  @@index([inventoryLotId, occurredAt(sort: Desc)])
+}
+
+model DailyFeeding {
+  id            String @id @default(uuid()) @db.Uuid
+  fishStockId   String @db.Uuid
+  cageId        String @db.Uuid
+  feedProductId String @db.Uuid
+  fedAt         DateTime
+  quantityKg    Decimal @db.Decimal(14,3)
+  appetiteScore Int?
+  notes         String?
+  fishStock     FishStock @relation(fields: [fishStockId], references: [id], onDelete: Restrict)
+  cage          Cage @relation(fields: [cageId], references: [id], onDelete: Restrict)
+  feedProduct   FeedProduct @relation(fields: [feedProductId], references: [id])
+  @@index([fishStockId, fedAt(sort: Desc)])
+}
+
+model Mortality {
+  id          String @id @default(uuid()) @db.Uuid
+  fishStockId String @db.Uuid
+  cageId      String @db.Uuid
+  occurredAt  DateTime
+  count       Int
+  reason      String?
+  diseaseId   String? @db.Uuid
+  fishStock   FishStock @relation(fields: [fishStockId], references: [id], onDelete: Restrict)
+  cage        Cage @relation(fields: [cageId], references: [id], onDelete: Restrict)
+  disease     Disease? @relation(fields: [diseaseId], references: [id])
+  @@index([fishStockId, occurredAt(sort: Desc)])
+}
+
+model Disease {
+  id          String @id @default(uuid()) @db.Uuid
+  name        String @unique
+  description String?
+  mortalities Mortality[]
+  treatments  Treatment[]
+}
+
+model Treatment {
+  id          String @id @default(uuid()) @db.Uuid
+  fishStockId String @db.Uuid
+  diseaseId   String? @db.Uuid
+  startedAt   DateTime
+  endedAt     DateTime?
+  medicine    String
+  dosage      String
+  withdrawalEndsAt DateTime?
+  fishStock   FishStock @relation(fields: [fishStockId], references: [id], onDelete: Restrict)
+  disease     Disease? @relation(fields: [diseaseId], references: [id])
+}
+
+model Vaccination {
+  id          String @id @default(uuid()) @db.Uuid
+  fishStockId String @db.Uuid
+  administeredAt DateTime
+  vaccine     String
+  dose         String?
+  fishStock   FishStock @relation(fields: [fishStockId], references: [id], onDelete: Restrict)
+}
+
+model WaterQuality {
+  id          String @id @default(uuid()) @db.Uuid
+  cageId      String @db.Uuid
+  observedAt  DateTime
+  temperatureC Decimal? @db.Decimal(5,2)
+  dissolvedOxygenMgL Decimal? @db.Decimal(5,2)
+  ph          Decimal? @db.Decimal(4,2)
+  ammoniaMgL  Decimal? @db.Decimal(7,4)
+  nitriteMgL  Decimal? @db.Decimal(7,4)
+  nitrateMgL  Decimal? @db.Decimal(7,4)
+  salinityPpt Decimal? @db.Decimal(7,3)
+  transparencyCm Decimal? @db.Decimal(7,2)
+  orpMv       Decimal? @db.Decimal(7,2)
+  cage        Cage @relation(fields: [cageId], references: [id], onDelete: Restrict)
+  @@index([cageId, observedAt(sort: Desc)])
+}
+
+model WeatherObservation {
+  id          String @id @default(uuid()) @db.Uuid
+  lakeId      String @db.Uuid
+  observedAt  DateTime
+  temperatureC Decimal? @db.Decimal(5,2)
+  windSpeedMs Decimal? @db.Decimal(6,2)
+  precipitationMm Decimal? @db.Decimal(7,2)
+  lake        Lake @relation(fields: [lakeId], references: [id], onDelete: Restrict)
+  @@index([lakeId, observedAt(sort: Desc)])
+}
+
+model Employee {
+  id        String @id @default(uuid()) @db.Uuid
+  farmId    String @db.Uuid
+  name      String
+  phone     String?
+  hiredAt   DateTime?
+  farm      Farm @relation(fields: [farmId], references: [id], onDelete: Restrict)
+  attendance Attendance[]
+  @@unique([farmId, name])
+}
+
+model Attendance {
+  id         String @id @default(uuid()) @db.Uuid
+  employeeId String @db.Uuid
+  userId     String? @db.Uuid
+  workDate   DateTime @db.Date
+  checkedInAt DateTime?
+  checkedOutAt DateTime?
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  user       User? @relation(fields: [userId], references: [id])
+  @@unique([employeeId, workDate])
+}
+
+model Task {
+  id           String @id @default(uuid()) @db.Uuid
+  farmId       String @db.Uuid
+  title        String
+  status       TaskStatus @default(OPEN)
+  dueAt        DateTime?
+  assigneeId   String? @db.Uuid
+  createdById  String @db.Uuid
+  farm         Farm @relation(fields: [farmId], references: [id], onDelete: Restrict)
+  assignee     User? @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  createdBy    User @relation("TaskCreator", fields: [createdById], references: [id])
+  @@index([farmId, status, dueAt])
+}
+
+model Asset {
+  id        String @id @default(uuid()) @db.Uuid
+  farmId    String @db.Uuid
+  type      String
+  name      String
+  serialNo  String?
+  farm      Farm @relation(fields: [farmId], references: [id], onDelete: Restrict)
+  maintenance Maintenance[]
+  @@unique([farmId, serialNo])
+}
+
+model Maintenance {
+  id          String @id @default(uuid()) @db.Uuid
+  cageId      String? @db.Uuid
+  assetId     String? @db.Uuid
+  performedAt DateTime
+  description String
+  cost        Decimal? @db.Decimal(14,2)
+  cage        Cage? @relation(fields: [cageId], references: [id], onDelete: Restrict)
+  asset       Asset? @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  @@index([cageId, performedAt(sort: Desc)])
+  @@index([assetId, performedAt(sort: Desc)])
+}
+
+model Supplier {
+  id        String @id @default(uuid()) @db.Uuid
+  companyId String @db.Uuid
+  name      String
+  phone     String?
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  @@unique([companyId, name])
+}
+
+model Customer {
+  id        String @id @default(uuid()) @db.Uuid
+  companyId String @db.Uuid
+  name      String
+  phone     String?
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  sales     Sale[]
+  @@unique([companyId, name])
+}
+
+model Expense {
+  id        String @id @default(uuid()) @db.Uuid
+  companyId String @db.Uuid
+  category  ExpenseCategory
+  occurredAt DateTime
+  amount    Decimal @db.Decimal(14,2)
+  description String?
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  @@index([companyId, occurredAt(sort: Desc), category])
+}
+
+model Income {
+  id        String @id @default(uuid()) @db.Uuid
+  companyId String @db.Uuid
+  category  IncomeCategory
+  occurredAt DateTime
+  amount    Decimal @db.Decimal(14,2)
+  description String?
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  @@index([companyId, occurredAt(sort: Desc), category])
+}
+
+model Harvest {
+  id          String @id @default(uuid()) @db.Uuid
+  cageId      String @db.Uuid
+  fishStockId String @db.Uuid
+  harvestedAt DateTime
+  quantityKg  Decimal @db.Decimal(14,3)
+  cage        Cage @relation(fields: [cageId], references: [id], onDelete: Restrict)
+  fishStock   FishStock @relation(fields: [fishStockId], references: [id], onDelete: Restrict)
+  sales       Sale[]
+  @@index([fishStockId, harvestedAt(sort: Desc)])
+}
+
+model Sale {
+  id         String @id @default(uuid()) @db.Uuid
+  harvestId  String @db.Uuid
+  customerId String @db.Uuid
+  soldAt     DateTime
+  quantityKg Decimal @db.Decimal(14,3)
+  unitPrice  Decimal @db.Decimal(14,2)
+  harvest    Harvest @relation(fields: [harvestId], references: [id], onDelete: Restrict)
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  @@index([customerId, soldAt(sort: Desc)])
+}
+
+model Notification {
+  id        String @id @default(uuid()) @db.Uuid
+  companyId String @db.Uuid
+  userId    String? @db.Uuid
+  channel   NotificationChannel
+  status    NotificationStatus @default(PENDING)
+  title     String
+  body      String
+  createdAt DateTime @default(now())
+  sentAt    DateTime?
+  readAt    DateTime?
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user      User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([companyId, status, createdAt(sort: Desc)])
+}
+
+model MediaAsset {
+  id          String @id @default(uuid()) @db.Uuid
+  companyId   String @db.Uuid
+  uploadedById String @db.Uuid
+  type        MediaType
+  storageKey  String @unique
+  fileName    String
+  contentType String
+  byteSize    Int
+  createdAt   DateTime @default(now())
+  uploadedBy  User @relation("MediaUploader", fields: [uploadedById], references: [id], onDelete: Restrict)
+  @@index([companyId, createdAt(sort: Desc)])
+}
+
+model AiAnalysis {
+  id          String @id @default(uuid()) @db.Uuid
+  companyId   String @db.Uuid
+  type        String
+  status      AnalysisStatus @default(PENDING)
+  modelVersion String?
+  inputHash   String
+  result      Json?
+  confidence  Decimal? @db.Decimal(5,4)
+  createdAt   DateTime @default(now())
+  completedAt DateTime?
+  company     Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  @@unique([companyId, type, inputHash])
+}
+
+model AuditLog {
+  id            String @id @default(uuid()) @db.Uuid
+  companyId     String @db.Uuid
+  actorUserId   String? @db.Uuid
+  action        String
+  entityType    String
+  entityId      String
+  before        Json?
+  after         Json?
+  correlationId String?
+  createdAt     DateTime @default(now())
+  company       Company @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  actor         User? @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  @@index([companyId, entityType, entityId, createdAt(sort: Desc)])
+}
